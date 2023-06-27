@@ -1,0 +1,54 @@
+name: YiFeiZHANG
+login ID: yifeizhang2
+student ID: 1174267
+
+
+1. Should the server accept calls from everyone, or just a subset of users?:
+No, large number of request will slow the server down, or even crush the server.
+
+
+2. Should authentication etc. be provided by the RPC framework, or by the functions that use the RPC framework?:
+Ideally, by the framework. This is because framework can provide consistent services. If we implement the service such as authentication
+ on functions, it will be hard to maintain as the number of functions continue to grow.
+
+
+3. What transport layer protocol should be used? What are the trade-offs?:
+We have TCP and UDP to choose. The characteristics of TCP are slow but reliable and also precise on calculation. As the system we are building is RPC system which need to make sure data successfully transmit to other side, hence TCP is a better choice than UDP. The trade-offs are more complex and slower.
+
+
+4. In which function(s) should the socket(s) be created?:
+For the server: rpc_init_server(int port). For the client: rpc_init_clienr(char *addr, int port).
+
+
+5. Should rpc_client and rpc_server be allocated dynamically or statically? What are the implications for the client and server code?:
+They should be allocated dynamically. This will make whole system more flexible and allow number of clients and servers to change at runtime. If they are allocated statically, it will be simpler and (almost) no risk of memory leaks.
+
+
+6. What happens if one host uses big-endian byte order and the other uses little-endian? How does that relate to “network byte order”?:
+They will misinterpret the data send between them and lead to incorrect result in communication. Same network byte order can avoid this issue. When data sent over the network, the sending host converts its data from its native byte order to network byte order. The receiving host then converts the received data from network byte order to its native byte order.
+
+
+Protocol Design:
+ - Basic Information: 
+	1. Before transfer any data between client and server, need to set up same network byte ordering for both client and server (See 'Encoding'). In all cases, length should be less than 100000.
+	2. Before any interaction, both server and client should be initialised by given port number and address. Both server and clinet contain a socket for communication purpose. Server also contains a array of functions that registered and provide services for client, array should follow by two buddy variables that used to record current number of functions registered and maximum number of array.
+	3. Client can send different messages fields to intereact with server:
+		3.1. Sending 'identifier'(1 byte) of 'F' from 'rpc_find' and 'C' from 'rpc_call' to activate services from server. (See 'Workflow').
+		3.2. To look up functions in server, client should send 'identifier' follow by function name, server should receive 'identifier' first, then receive funtion name from client. Server should give response based on process result (4 bytes).
+		3.3. To call producre, client should send 'identifier' follow by length of function name (4 byte), function name, data1 (4 byte), data2 size and data2. Server should read these data in order. After processed, server should send new data1, data2 size and data2 back to client and client should read them in order.
+	4. The length of function name and data2 is not fixed. Client should always send length before send actual data.
+	5. Client should always starts the conservastion, server should always be passive-open.
+	6. IP packets have maximum allowed size of 65000 bytes.
+
+ - Transport Layer Protocol: Use TCP as the transport layer protocol, as it ensures reliability, ordered delivery, and error checking. It is also suitable for handling packet loss and duplication. TCP runs on top of IPv6.
+
+ - Error Handling: 
+	1. If a request is made with an invalid function name or data (such as empty function name), this request will failed and return NULL. 
+	2. If request is processed by server but answer is not valid (answer is NULL), the request is considered as fail and return NULL; 
+	3. If there's a communication error (e.g. connection lost), both the client and server will handle it gracefully and will not crash. 
+	4. If data2_len is too large to be encoded in your packet format, this request will fail, error message of "Overlength error" will print to stderr and return an error.
+	5. If there is data2_len and data2 inconsistency in income data of client or response data from server, request failed and NULL should be return.
+
+ - Encoding: Strings are null-terminated. Numbers are sent in network byte order (big endian) and should be converted to host byte order by the receiver.The size of the handler name field and data2_len field is encoded as a 64-bit integer during the communication between client and server.
+
+ - Workflow of Protocol: The client initializes a connection to the server, and the server sets up a listening socket. The client can use the 'rpc_find' function to check if a function exists on the server. The client sends 'F' followed by the function name, and the server sends back a 1 if the function exists or a 0 otherwise. The client can use the 'rpc_call' function to call a function on the server. The client sends 'C', followed by the function name and the data to be sent to the function. The server processes the request and sends back the result. If result of server or data send from client matchs any rules in 'Error Handling', the request considers as failed.  Multiple client and requests is allowed. The client can close the connection using the 'rpc_close_client' function. The server will remain open waiting for next client.
